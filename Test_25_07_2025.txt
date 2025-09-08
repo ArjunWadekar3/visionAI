@@ -1,0 +1,128 @@
+import cv2
+import mediapipe as mp
+import math
+import face_recognition
+import os
+
+# Init MediaPipe
+mp_hands = mp.solutions.hands
+mp_face = mp.solutions.face_mesh
+mp_drawing = mp.solutions.drawing_utils
+
+# Helpers
+def hand_side(landmarks):
+    wrist_x = landmarks.landmark[0].x
+    thumb_x = landmarks.landmark[4].x
+    return "Right" if thumb_x < wrist_x else "Left"
+
+def count_fingers(hand_landmarks, hand_label):
+    # Tip landmarks for fingers
+    finger_tips = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
+    thumb_tip = 4
+
+    fingers = []
+
+    # Thumb (depends on hand side)
+    if hand_label == "Right":
+        fingers.append(hand_landmarks.landmark[thumb_tip].x < hand_landmarks.landmark[3].x)
+    else:
+        fingers.append(hand_landmarks.landmark[thumb_tip].x > hand_landmarks.landmark[3].x)
+
+    # Other fingers
+    for tip in finger_tips:
+        fingers.append(hand_landmarks.landmark[tip].y < hand_landmarks.landmark[tip - 2].y)
+
+    return fingers.count(True)
+
+def face_direction(landmarks):
+    nose = landmarks.landmark[1].x
+    left_cheek = landmarks.landmark[234].x
+    right_cheek = landmarks.landmark[454].x
+    if nose < left_cheek:
+        return "Looking Right"
+    elif nose > right_cheek:
+        return "Looking Left"
+    else:
+        return "Looking Forward"
+
+# Load known faces
+known_face_encodings = []
+known_face_names = []
+faces_dir = "data/faces/face/"
+for filename in os.listdir(faces_dir):
+    if filename.lower().endswith((".jpg", ".jpeg", ".png")):
+        image = face_recognition.load_image_file(os.path.join(faces_dir, filename))
+        encodings = face_recognition.face_encodings(image)
+        if encodings:
+            known_face_encodings.append(encodings[0])
+            known_face_names.append(filename)
+
+# Start webcam
+cap = cv2.VideoCapture(0)
+with mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.7) as hands, \
+     mp_face.FaceMesh(min_detection_confidence=0.5) as face_mesh:
+
+    print("[INFO] Starting VisionGuard AI Action Logger... Press ESC to quit")
+
+    frame_count = 0
+    while cap.isOpened():
+        success, frame = cap.read()
+        if not success:
+            continue
+
+        frame = cv2.flip(frame, 1)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        hand_results = hands.process(rgb)
+        face_results = face_mesh.process(rgb)
+
+        # Process hands
+        if hand_results.multi_hand_landmarks:
+            for hand_landmarks in hand_results.multi_hand_landmarks:
+                #mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                side = hand_side(hand_landmarks)
+                fingers_up = count_fingers(hand_landmarks, side)
+
+                # Basic gesture recognition
+                if fingers_up == 0:
+                    gesture = "Fist"
+                elif fingers_up == 1:
+                    gesture = "One"
+                elif fingers_up == 2:
+                    gesture = "Peace ✌️"
+                elif fingers_up == 5:
+                    gesture = "Open Palm 🖐️"
+                else:
+                    gesture = f"{fingers_up} fingers"
+
+                print(f"✋ {side} hand detected — {gesture}")
+
+        # Process face
+        if face_results.multi_face_landmarks:
+            for face_landmarks in face_results.multi_face_landmarks:
+                #mp_drawing.draw_landmarks(frame, face_landmarks, mp_face.FACEMESH_TESSELATION)
+                direction = face_direction(face_landmarks)
+                print(f"\U0001F464 Face direction: {direction}")
+
+        # Optimized Face recognition (using face_recognition)
+        frame_count += 1
+        if frame_count % 5 == 0:
+            small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_small_frame)
+            face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+            for face_encoding in face_encodings:
+                matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=0.5)
+                matched_names = [name for match, name in zip(matches, known_face_names) if match]
+                if matched_names:
+                    print(f"\U0001F464 Recognized: {', '.join(matched_names)}")
+                else:
+                    print(f"\U0001F464 Recognized: Unknown")
+
+        # Show output
+        cv2.imshow("VisionGuard AI", frame)
+        if cv2.waitKey(1) & 0xFF == 27:  # ESC
+            break
+
+cap.release()
+cv2.destroyAllWindows()
