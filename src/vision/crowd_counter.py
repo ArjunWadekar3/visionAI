@@ -18,6 +18,7 @@ detector can; true 10k+ exact counts need a density model.
 
 import os
 
+import cv2
 import numpy as np
 
 try:
@@ -194,34 +195,46 @@ class CrowdCounter:
                                   int(b[2] + ox), int(b[3] + oy)))
         return _nms(boxes, 0.5)
 
-    def _filter_head_boxes(self, boxes, frame_h, frame_w):
-        """Post-filter to keep only head-like boxes: reasonable aspect ratio + area.
-        Removes shadows, banners, thin lines, etc. Tuned for aerial/crowd footage.
-        NSA_HEAD_MIN_AREA, NSA_HEAD_MAX_AREA, NSA_HEAD_ASPECT for override."""
-        min_area = int(os.environ.get("NSA_HEAD_MIN_AREA", "80"))
+    def _filter_head_boxes(self, boxes, frame, frame_h, frame_w):
+        """Post-filter to keep only head-like boxes: strict aspect ratio + area + darkness.
+        Removes shadows (dark regions), banners (wide), thin lines, signals (small/large).
+        Tuned for aerial/crowd footage. Override: NSA_HEAD_MIN_AREA, NSA_HEAD_MAX_AREA, etc."""
+        min_area = int(os.environ.get("NSA_HEAD_MIN_AREA", "100"))
         max_area = int(os.environ.get("NSA_HEAD_MAX_AREA",
-                                      int((frame_h * frame_w) * 0.1)))
-        min_aspect = float(os.environ.get("NSA_HEAD_MIN_ASPECT", "0.4"))
-        max_aspect = float(os.environ.get("NSA_HEAD_MAX_ASPECT", "2.5"))
+                                      int((frame_h * frame_w) * 0.04)))
+        min_aspect = float(os.environ.get("NSA_HEAD_MIN_ASPECT", "0.6"))
+        max_aspect = float(os.environ.get("NSA_HEAD_MAX_ASPECT", "1.7"))
+        min_brightness = int(os.environ.get("NSA_HEAD_MIN_BRIGHTNESS", "50"))
         filtered = []
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame is not None else None
         for (x1, y1, x2, y2) in boxes:
             w = x2 - x1
             h = y2 - y1
             area = w * h
             if area < min_area or area > max_area:
                 continue
-            # Head aspect ratio: roughly square
+            # Head aspect ratio: roughly square (favor 0.8-1.2, allow up to 1.7)
             aspect = h / (w + 1e-6)
             if aspect < min_aspect or aspect > max_aspect:
                 continue
+            # Filter out shadows: very dark regions (avg brightness < threshold)
+            if gray is not None:
+                x1c, y1c = max(0, x1), max(0, y1)
+                x2c, y2c = min(frame_w, x2), min(frame_h, y2)
+                if x2c > x1c and y2c > y1c:
+                    roi = gray[y1c:y2c, x1c:x2c]
+                    avg_brightness = roi.mean()
+                    if avg_brightness < min_brightness:
+                        continue  # shadow, skip
             filtered.append((x1, y1, x2, y2))
         return filtered
 
     def _detect(self, frame):
         """Return list of (x1,y1,x2,y2) person boxes for one frame."""
+        fh, fw = frame.shape[:2]
         if self.use_tiled:
             boxes = self._detect_tiled_batch(frame)
-            return self._filter_head_boxes(boxes, frame.shape[0], frame.shape[1])
+            return self._filter_head_boxes(boxes, frame, fh, fw)
         if self.use_sahi and self._sahi_model is not None:
             from sahi.predict import get_sliced_prediction
             result = get_sliced_prediction(
@@ -236,7 +249,7 @@ class CrowdCounter:
                 bb = obj.bbox
                 boxes.append((int(bb.minx), int(bb.miny),
                               int(bb.maxx), int(bb.maxy)))
-            return self._filter_head_boxes(boxes, frame.shape[0], frame.shape[1])
+            return self._filter_head_boxes(boxes, frame, fh, fw)
         # whole-frame
         res = self.model.predict(frame, conf=self.conf, classes=self.classes,
                                  imgsz=self.imgsz, max_det=self.max_det, verbose=False)
@@ -244,7 +257,7 @@ class CrowdCounter:
         if res and res[0].boxes is not None:
             for b in res[0].boxes.xyxy.cpu().numpy():
                 boxes.append((int(b[0]), int(b[1]), int(b[2]), int(b[3])))
-        return self._filter_head_boxes(boxes, frame.shape[0], frame.shape[1])
+        return self._filter_head_boxes(boxes, frame, fh, fw)
 
     def process(self, frame):
         """Return (count, unique_total, boxes, ids, centers)."""

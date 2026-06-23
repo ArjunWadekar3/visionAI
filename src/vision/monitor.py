@@ -48,7 +48,7 @@ import numpy as np
 #     export NSA_CLASSES=0        # class id(s) to count (head model: usually 0)
 #
 MODEL_PATH = os.environ.get("NSA_MODEL_PATH", "")
-PERSON_CONF = float(os.environ.get("NSA_CONF", "0.3"))
+PERSON_CONF = float(os.environ.get("NSA_CONF", "0.15"))   # low = catch more heads, geometry filter removes noise
 _cls_env = os.environ.get("NSA_CLASSES", "0")
 DETECT_CLASSES = [int(c) for c in _cls_env.split(",") if c.strip().lstrip("-").isdigit()]
 
@@ -56,8 +56,8 @@ DETECT_CLASSES = [int(c) for c in _cls_env.split(",") if c.strip().lstrip("-").i
 # frame (many tiles), so off by default. Enable: export NSA_SAHI=1
 USE_SAHI = os.environ.get("NSA_SAHI", "0") == "1"
 USE_TILED = os.environ.get("NSA_TILED", "0") == "1"   # batched tiling (CPU-friendly, same detection)
-SLICE_SIZE = int(os.environ.get("NSA_SLICE", "512"))
-IMGSZ = int(os.environ.get("NSA_IMGSZ", "1280"))         # whole-frame inference size
+SLICE_SIZE = int(os.environ.get("NSA_SLICE", "640"))     # larger tiles = faster (fewer tiles)
+IMGSZ = int(os.environ.get("NSA_IMGSZ", "1024"))         # whole-frame inference size (reduced for speed)
 OVERCROWD = int(os.environ.get("NSA_OVERCROWD", "200"))  # crowd-level threshold
 DETECT_EVERY = max(1, int(os.environ.get("NSA_DETECT_EVERY", "1")))  # run detection every Nth frame (speed)
 SHOW_IDS = os.environ.get("NSA_SHOW_IDS", "1") == "1"    # draw unique track id on each box
