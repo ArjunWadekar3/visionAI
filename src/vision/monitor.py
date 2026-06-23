@@ -55,6 +55,7 @@ DETECT_CLASSES = [int(c) for c in _cls_env.split(",") if c.strip().lstrip("-").i
 # SAHI tiled inference -- big boost for small/dense/aerial heads. Slower per
 # frame (many tiles), so off by default. Enable: export NSA_SAHI=1
 USE_SAHI = os.environ.get("NSA_SAHI", "0") == "1"
+USE_TILED = os.environ.get("NSA_TILED", "0") == "1"   # batched tiling (CPU-friendly, same detection)
 SLICE_SIZE = int(os.environ.get("NSA_SLICE", "512"))
 IMGSZ = int(os.environ.get("NSA_IMGSZ", "1280"))         # whole-frame inference size
 OVERCROWD = int(os.environ.get("NSA_OVERCROWD", "200"))  # crowd-level threshold
@@ -206,7 +207,7 @@ def main():
     model = load_model()
     counter = CrowdCounter(model, MODEL_PATH or "yolov8s.pt", conf=PERSON_CONF,
                            classes=DETECT_CLASSES, use_sahi=USE_SAHI,
-                           slice_size=SLICE_SIZE, imgsz=IMGSZ)
+                           use_tiled=USE_TILED, slice_size=SLICE_SIZE, imgsz=IMGSZ)
     crowd = CrowdAnalytics(overcrowd_threshold=OVERCROWD)
     watch = Watchlist(WATCH_DIR)
     os.makedirs(ALERT_DIR, exist_ok=True)
