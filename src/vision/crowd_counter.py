@@ -195,16 +195,27 @@ class CrowdCounter:
                                   int(b[2] + ox), int(b[3] + oy)))
         return _nms(boxes, 0.5)
 
-    def _filter_head_boxes(self, boxes, frame, frame_h, frame_w):
-        """Post-filter to keep only head-like boxes: aspect ratio + area + darkness.
-        Removes only egregious false positives (very dark shadows, huge banners).
-        Override: NSA_HEAD_MIN_AREA, NSA_HEAD_MAX_AREA, etc."""
-        min_area = int(os.environ.get("NSA_HEAD_MIN_AREA", "50"))
-        max_area = int(os.environ.get("NSA_HEAD_MAX_AREA",
-                                      int((frame_h * frame_w) * 0.08)))
-        min_aspect = float(os.environ.get("NSA_HEAD_MIN_ASPECT", "0.4"))
-        max_aspect = float(os.environ.get("NSA_HEAD_MAX_ASPECT", "2.5"))
-        min_brightness = int(os.environ.get("NSA_HEAD_MIN_BRIGHTNESS", "20"))
+    def _filter_head_boxes(self, boxes, frame, frame_h, frame_w, strict=True):
+        """Filter boxes by geometry + darkness.
+        strict=True: tight filter for COUNTING (heads only)
+        strict=False: loose filter for VISUALIZATION (show more detections)"""
+        if strict:
+            # Strict: heads only
+            min_area = int(os.environ.get("NSA_HEAD_MIN_AREA", "100"))
+            max_area = int(os.environ.get("NSA_HEAD_MAX_AREA",
+                                          int((frame_h * frame_w) * 0.04)))
+            min_aspect = float(os.environ.get("NSA_HEAD_MIN_ASPECT", "0.6"))
+            max_aspect = float(os.environ.get("NSA_HEAD_MAX_ASPECT", "1.7"))
+            min_brightness = int(os.environ.get("NSA_HEAD_MIN_BRIGHTNESS", "40"))
+        else:
+            # Loose: more detections for visualization
+            min_area = int(os.environ.get("NSA_HEAD_MIN_AREA", "40"))
+            max_area = int(os.environ.get("NSA_HEAD_MAX_AREA",
+                                          int((frame_h * frame_w) * 0.1)))
+            min_aspect = float(os.environ.get("NSA_HEAD_MIN_ASPECT", "0.3"))
+            max_aspect = float(os.environ.get("NSA_HEAD_MAX_ASPECT", "3.0"))
+            min_brightness = int(os.environ.get("NSA_HEAD_MIN_BRIGHTNESS", "10"))
+
         filtered = []
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame is not None else None
         for (x1, y1, x2, y2) in boxes:
@@ -213,11 +224,9 @@ class CrowdCounter:
             area = w * h
             if area < min_area or area > max_area:
                 continue
-            # Head aspect ratio: roughly square (favor 0.8-1.2, allow up to 1.7)
             aspect = h / (w + 1e-6)
             if aspect < min_aspect or aspect > max_aspect:
                 continue
-            # Filter out shadows: very dark regions (avg brightness < threshold)
             if gray is not None:
                 x1c, y1c = max(0, x1), max(0, y1)
                 x2c, y2c = min(frame_w, x2), min(frame_h, y2)
@@ -225,17 +234,16 @@ class CrowdCounter:
                     roi = gray[y1c:y2c, x1c:x2c]
                     avg_brightness = roi.mean()
                     if avg_brightness < min_brightness:
-                        continue  # shadow, skip
+                        continue
             filtered.append((x1, y1, x2, y2))
         return filtered
 
     def _detect(self, frame):
-        """Return list of (x1,y1,x2,y2) person boxes for one frame."""
+        """Return (strict_boxes, loose_boxes) for tracking + visualization."""
         fh, fw = frame.shape[:2]
         if self.use_tiled:
             boxes = self._detect_tiled_batch(frame)
-            return self._filter_head_boxes(boxes, frame, fh, fw)
-        if self.use_sahi and self._sahi_model is not None:
+        elif self.use_sahi and self._sahi_model is not None:
             from sahi.predict import get_sliced_prediction
             result = get_sliced_prediction(
                 frame, self._sahi_model,
@@ -249,25 +257,27 @@ class CrowdCounter:
                 bb = obj.bbox
                 boxes.append((int(bb.minx), int(bb.miny),
                               int(bb.maxx), int(bb.maxy)))
-            return self._filter_head_boxes(boxes, frame, fh, fw)
-        # whole-frame
-        res = self.model.predict(frame, conf=self.conf, classes=self.classes,
-                                 imgsz=self.imgsz, max_det=self.max_det, verbose=False)
-        boxes = []
-        if res and res[0].boxes is not None:
-            for b in res[0].boxes.xyxy.cpu().numpy():
-                boxes.append((int(b[0]), int(b[1]), int(b[2]), int(b[3])))
-        return self._filter_head_boxes(boxes, frame, fh, fw)
+        else:
+            # whole-frame
+            res = self.model.predict(frame, conf=self.conf, classes=self.classes,
+                                     imgsz=self.imgsz, max_det=self.max_det, verbose=False)
+            boxes = []
+            if res and res[0].boxes is not None:
+                for b in res[0].boxes.xyxy.cpu().numpy():
+                    boxes.append((int(b[0]), int(b[1]), int(b[2]), int(b[3])))
+        # Return both: strict for counting, loose for visualization
+        strict = self._filter_head_boxes(boxes, frame, fh, fw, strict=True)
+        loose = self._filter_head_boxes(boxes, frame, fh, fw, strict=False)
+        return strict, loose
 
     def process(self, frame):
-        """Return (count, unique_total, boxes, ids, centers)."""
-        boxes = self._detect(frame)
+        """Return (count, unique_total, strict_boxes, ids, centers, loose_boxes)."""
+        strict_boxes, loose_boxes = self._detect(frame)
         if self.tracker is not None:
-            ids = self.tracker.update(boxes)
+            ids = self.tracker.update(strict_boxes)
             unique_total = self.tracker.unique_total
         else:
-            # Per-frame numbering 1..N: largest id == count == people detected.
-            ids = list(range(1, len(boxes) + 1))
-            unique_total = len(boxes)
-        centers = [((x1 + x2) / 2.0, (y1 + y2) / 2.0) for x1, y1, x2, y2 in boxes]
-        return len(boxes), unique_total, boxes, ids, centers
+            ids = list(range(1, len(strict_boxes) + 1))
+            unique_total = len(strict_boxes)
+        centers = [((x1 + x2) / 2.0, (y1 + y2) / 2.0) for x1, y1, x2, y2 in strict_boxes]
+        return len(strict_boxes), unique_total, strict_boxes, ids, centers, loose_boxes

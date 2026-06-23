@@ -136,7 +136,7 @@ class DetectorThread:
     def __init__(self, counter):
         self.counter = counter
         self._frame = None
-        self._result = (0, 0, [], [], [])  # count, unique_total, boxes, ids, centers
+        self._result = (0, 0, [], [], [], [])  # count, unique_total, boxes, ids, centers, loose
         self._lock = threading.Lock()
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -160,9 +160,9 @@ class DetectorThread:
             if f is None:
                 time.sleep(0.005)
                 continue
-            count, unique_total, boxes, ids, centers = self.counter.process(f)
+            count, unique_total, boxes, ids, centers, loose = self.counter.process(f)
             with self._lock:
-                self._result = (count, unique_total, boxes, ids, centers)
+                self._result = (count, unique_total, boxes, ids, centers, loose)
 
     def stop(self):
         self._running = False
@@ -259,16 +259,20 @@ def main():
         # detection quality). Video file: detect every frame for accuracy.
         if detector is not None:
             detector.submit(frame)
-            count, unique_total, boxes, ids, centers = detector.get()
+            count, unique_total, boxes, ids, centers, loose_boxes = detector.get()
         else:
-            count, unique_total, boxes, ids, centers = counter.process(frame)
+            count, unique_total, boxes, ids, centers, loose_boxes = counter.process(frame)
         if dedup is not None:
             unique_total, ids = dedup.update(frame, centers)
         peak_count = max(peak_count, count)
         reporter.update_peak(count)
         reporter.update_unique(unique_total)
+        # Draw loose boxes (visualization, faint)
+        for (x1, y1, x2, y2) in loose_boxes:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (100, 100, 100), 1)
+        # Draw strict boxes with IDs (counting)
         for (x1, y1, x2, y2), tid in zip(boxes, ids):
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             if SHOW_IDS:
                 cv2.putText(frame, str(tid), (x1, y1 - 3),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
