@@ -115,6 +115,7 @@ def main():
 
     window = "NeuralStream Monitoring"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     drawer = LineDrawer(counter)
     cv2.setMouseCallback(window, drawer.on_mouse)
 
