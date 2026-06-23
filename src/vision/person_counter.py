@@ -85,9 +85,11 @@ class LineCrossingCounter:
         self.events = []
 
     def draw(self, frame):
+        """Draw just a clean counting line. Counts are shown in the side panel."""
         if self.line is None:
             return
         (x1, y1), (x2, y2) = self.line
-        cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 3)
-        cv2.putText(frame, f"Crossed: {self.total}  (A->B {self.count_a2b} | B->A {self.count_b2a})",
-                    (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        p1, p2 = (int(x1), int(y1)), (int(x2), int(y2))
+        cv2.line(frame, p1, p2, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.circle(frame, p1, 5, (0, 0, 255), -1, cv2.LINE_AA)
+        cv2.circle(frame, p2, 5, (0, 0, 255), -1, cv2.LINE_AA)

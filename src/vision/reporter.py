@@ -109,15 +109,21 @@ class Reporter:
         return base
 
 
-def ask_report_config():
-    """Interactive prompt -> (enabled, interval_minutes_or_None)."""
+def ask_report_config(default_dir):
+    """Interactive prompt -> (enabled, interval_minutes_or_None, out_dir)."""
     ans = input("Generate reports? (y/n): ").strip().lower()
     if ans != "y":
-        return False, None
+        return False, None, default_dir
+
+    out_dir = input(
+        f"Where to save reports? (Enter for default: {default_dir}): ").strip()
+    out_dir = os.path.expanduser(out_dir.strip('"').strip("'")) if out_dir else default_dir
+
     print("Report interval (live mode):")
     print("  1 - every 20 minutes")
     print("  2 - every 30 minutes")
     print("  3 - hourly")
     print("  4 - entire day (once)")
     c = input("Enter 1/2/3/4 (default 3): ").strip()
-    return True, {"1": 20, "2": 30, "3": 60, "4": 1440}.get(c, 60)
+    interval = {"1": 20, "2": 30, "3": 60, "4": 1440}.get(c, 60)
+    return True, interval, out_dir

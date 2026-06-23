@@ -26,10 +26,17 @@ from ultralytics import YOLO  # keep first
 import os
 import sys
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
 import cv2
+import numpy as np
+
+# Minimum YOLO confidence for a detection to count as a person. Raising this
+# removes spurious "ghost" detections (e.g. counting 4-5 people when alone).
+PERSON_CONF = 0.5
+PANEL_W = 360  # width of the live side dashboard
 
 # Make sibling modules importable and resolve data paths from the project root,
 # so the app works no matter which directory you launch it from.
@@ -95,16 +102,70 @@ def load_model():
     raise RuntimeError("Could not load any YOLO model")
 
 
+def render_panel(height, stats):
+    """Build the live dashboard panel shown to the right of the video feed."""
+    panel = np.full((height, PANEL_W, 3), 25, dtype=np.uint8)
+    F = cv2.FONT_HERSHEY_SIMPLEX
+    x = 18
+    y = 40
+
+    def line(text, color=(230, 230, 230), scale=0.6, thick=1, gap=30):
+        nonlocal y
+        cv2.putText(panel, text, (x, y), F, scale, color, thick, cv2.LINE_AA)
+        y += gap
+
+    line("LIVE MONITOR", (0, 255, 255), 0.8, 2, 26)
+    cv2.line(panel, (x, y - 8), (PANEL_W - x, y - 8), (70, 70, 70), 1)
+    y += 12
+
+    line(f"Source : {stats['source'][:24]}", (180, 180, 180), 0.5, 1, 26)
+    line(f"FPS    : {stats['fps']:.1f}", (180, 180, 180), 0.5, 1, 34)
+
+    line(f"Persons now : {stats['persons']}", (0, 255, 0), 0.7, 2, 30)
+    level_color = {"LOW": (0, 255, 0), "MEDIUM": (0, 255, 255),
+                   "HIGH": (0, 165, 255), "CRITICAL": (0, 0, 255)}.get(
+                       stats['level'], (200, 200, 200))
+    line(f"Crowd level : {stats['level']}", level_color, 0.7, 2, 34)
+
+    cv2.line(panel, (x, y - 14), (PANEL_W - x, y - 14), (70, 70, 70), 1)
+    line(f"Line crossed: {stats['crossed']}", (0, 0, 255), 0.7, 2, 28)
+    line(f"   A->B {stats['a2b']}   B->A {stats['b2a']}", (160, 160, 255), 0.55, 1, 34)
+
+    cv2.line(panel, (x, y - 14), (PANEL_W - x, y - 14), (70, 70, 70), 1)
+    line(f"Watchlist alerts: {stats['alerts']}", (0, 0, 255), 0.6, 2, 30)
+
+    if stats['overcrowded']:
+        cv2.rectangle(panel, (x - 6, y - 18), (PANEL_W - 10, y + 8), (0, 0, 255), -1)
+        line("!! OVERCROWDING !!", (255, 255, 255), 0.6, 2, 36)
+    else:
+        y += 6
+
+    cv2.line(panel, (x, y - 14), (PANEL_W - x, y - 14), (70, 70, 70), 1)
+    line("Recent activity:", (255, 255, 0), 0.6, 1, 26)
+    if stats['activities']:
+        for txt in stats['activities']:
+            line(f" - {txt}", (200, 200, 200), 0.5, 1, 24)
+    else:
+        line(" (none)", (120, 120, 120), 0.5, 1, 24)
+
+    # footer hint
+    cv2.putText(panel, "drag=line  d=heatmap  ESC=quit",
+                (x, height - 20), F, 0.45, (120, 120, 120), 1, cv2.LINE_AA)
+    return panel
+
+
 def main():
     print("=" * 60)
     print(" NeuralStream Vision - Monitoring System")
     print("=" * 60)
 
     source = select_source()
-    enabled, interval = ask_report_config()
+    enabled, interval, out_dir = ask_report_config(REPORT_DIR)
 
     mode = Reporter.MODE_LIVE if source.is_live else Reporter.MODE_VIDEO
-    reporter = Reporter(mode, REPORT_DIR, interval_minutes=interval, enabled=enabled)
+    reporter = Reporter(mode, out_dir, interval_minutes=interval, enabled=enabled)
+    if enabled:
+        print(f"[INFO] Reports will be saved to: {out_dir}")
 
     model = load_model()
     counter = LineCrossingCounter()
@@ -122,7 +183,12 @@ def main():
     show_heatmap = False
     frame_idx = 0
     current_label = None
-    active_alerts = []  # recent (name, expiry_time) for on-screen banner
+    active_alerts = []           # recent (name, expiry_time) for the banner
+    recent_activity = deque(maxlen=6)  # (text, expiry) for the side panel
+    alerts_total = 0
+    fps = 0.0
+    fps_t0 = time.time()
+    fps_n = 0
 
     print("\n[INFO] Started. Drag mouse to set the red line. 'd'=heatmap, ESC=quit.\n")
 
@@ -144,6 +210,7 @@ def main():
 
         # --- detection + tracking (persistent IDs) ---
         results = model.track(frame, persist=True, classes=[PERSON_CLASS],
+                              conf=PERSON_CONF, iou=0.5,
                               tracker="bytetrack.yaml", verbose=False)
         tracks = []
         if results and results[0].boxes is not None and results[0].boxes.id is not None:
@@ -165,6 +232,10 @@ def main():
         reporter.update_peak(info["count"])
         for ab in info["abnormal"]:
             reporter.log_abnormal(ab, timestamp)
+            if ab["type"] == "overcrowding":
+                recent_activity.append((f"Overcrowding ({ab['count']})", now + 4))
+            else:
+                recent_activity.append((f"Person #{ab['id']}: {ab['type']}", now + 4))
         if show_heatmap:
             frame = crowd.density_overlay(frame, info["centers"])
 
@@ -177,22 +248,17 @@ def main():
                 cv2.imwrite(snap, frame)
                 reporter.log_alert(m["name"], timestamp, snapshot=snap)
                 active_alerts.append((m["name"], now + 3.0))
+                recent_activity.append((f"WANTED: {m['name']}", now + 5))
+                alerts_total += 1
                 beep()
                 print(f"[ALERT] Watchlist match: {m['name']} -> {snap}")
                 bx = m["box"]
                 cv2.rectangle(frame, (bx[0], bx[1]), (bx[2], bx[3]), (0, 0, 255), 3)
 
-        # --- overlays ---
+        # --- draw clean line + boxes on the feed; stats go to the side panel ---
         counter.draw(frame)
-        cv2.putText(frame, f"Persons: {info['count']}  Level: {info['level']}",
-                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-        cv2.putText(frame, f"Source: {label}", (20, 75),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        if info["overcrowded"]:
-            cv2.putText(frame, "OVERCROWDING!", (20, 160),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
 
-        # active watchlist banner
+        # active watchlist banner (kept on the feed, it's important)
         active_alerts = [(n, t) for (n, t) in active_alerts if t > now]
         if active_alerts:
             names = ", ".join(n for n, _ in active_alerts)
@@ -200,10 +266,29 @@ def main():
             cv2.putText(frame, f"WANTED MATCH: {names}", (20, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
+        # FPS
+        fps_n += 1
+        if fps_n >= 15:
+            fps = fps_n / (time.time() - fps_t0)
+            fps_t0 = time.time()
+            fps_n = 0
+
+        # --- compose feed + side dashboard panel ---
+        activities = [t for (t, exp) in recent_activity if exp > now]
+        stats = {
+            "source": label, "fps": fps, "persons": info["count"],
+            "level": info["level"], "overcrowded": info["overcrowded"],
+            "crossed": counter.total, "a2b": counter.count_a2b,
+            "b2a": counter.count_b2a, "alerts": alerts_total,
+            "activities": activities[-6:],
+        }
+        panel = render_panel(frame.shape[0], stats)
+        combined = cv2.hconcat([frame, panel])
+
         # live interval report
         reporter.maybe_flush_live()
 
-        cv2.imshow(window, frame)
+        cv2.imshow(window, combined)
         key = cv2.waitKey(1) & 0xFF
         if key == 27:        # ESC
             break
