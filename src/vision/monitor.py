@@ -37,9 +37,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 import cv2
 import numpy as np
 
-# Minimum YOLO confidence for a detection to count as a person. Raising this
-# removes spurious "ghost" detections (e.g. counting 4-5 people when alone).
-PERSON_CONF = 0.5
+# --- Detection config (all overridable by environment variables) ---
+#
+# Default COCO YOLO is fine for normal front/side webcam/CCTV footage.
+# For DRONE / OVERHEAD footage (heads seen from above) COCO fails -- those angles
+# aren't in its training data. Use a head-detection or aerial-trained model:
+#     export NSA_MODEL_PATH=/path/to/head_or_visdrone_model.pt
+#     export NSA_CONF=0.30        # smaller heads from height need a lower threshold
+#     export NSA_CLASSES=0        # class id(s) to count (head model: usually 0)
+#
+MODEL_PATH = os.environ.get("NSA_MODEL_PATH", "")
+PERSON_CONF = float(os.environ.get("NSA_CONF", "0.4"))
+_cls_env = os.environ.get("NSA_CLASSES", "0")
+DETECT_CLASSES = [int(c) for c in _cls_env.split(",") if c.strip().lstrip("-").isdigit()]
 PANEL_W = 360  # width of the live side dashboard
 
 # Make sibling modules importable and resolve data paths from the project root,
@@ -59,7 +69,6 @@ WATCH_DIR = str(DATA / "watchlist")
 REPORT_DIR = str(DATA / "reports")
 ALERT_DIR = str(DATA / "alerts")
 
-PERSON_CLASS = 0  # COCO class id for "person"
 
 
 def beep():
@@ -117,10 +126,18 @@ class LineDrawer:
 
 
 def load_model():
+    # Custom model (head / aerial / VisDrone) takes priority for drone footage.
+    if MODEL_PATH:
+        if os.path.exists(MODEL_PATH):
+            print(f"[INFO] Loaded custom model: {MODEL_PATH} "
+                  f"(conf={PERSON_CONF}, classes={DETECT_CLASSES})")
+            return YOLO(MODEL_PATH)
+        print(f"[WARN] NSA_MODEL_PATH set but not found: {MODEL_PATH} "
+              f"-- falling back to default COCO model.")
     for name in ("yolov8s.pt", "yolov8n.pt"):
         try:
             m = YOLO(name)
-            print(f"[INFO] Loaded {name}")
+            print(f"[INFO] Loaded {name} (default COCO -- not ideal for overhead/drone)")
             return m
         except Exception:
             continue
@@ -210,7 +227,7 @@ def main():
         current_label = label
 
         # --- detection + tracking (persistent IDs) ---
-        results = model.track(frame, persist=True, classes=[PERSON_CLASS],
+        results = model.track(frame, persist=True, classes=DETECT_CLASSES,
                               conf=PERSON_CONF, iou=0.5,
                               tracker="bytetrack.yaml", verbose=False)
         tracks = []
