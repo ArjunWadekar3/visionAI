@@ -229,7 +229,8 @@ class CrowdCounter:
             ids = self.tracker.update(boxes)
             unique_total = self.tracker.unique_total
         else:
-            ids = list(range(len(boxes)))
+            # Per-frame numbering 1..N: largest id == count == people detected.
+            ids = list(range(1, len(boxes) + 1))
             unique_total = len(boxes)
         centers = [((x1 + x2) / 2.0, (y1 + y2) / 2.0) for x1, y1, x2, y2 in boxes]
         return len(boxes), unique_total, boxes, ids, centers

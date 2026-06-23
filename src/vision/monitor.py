@@ -182,8 +182,8 @@ def draw_overlay(frame, stats):
                        stats['level'], (200, 200, 200))
 
     cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 30), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"IN FRAME : {stats['persons']}", (x0 + 14, y0 + 78), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
-    cv2.putText(frame, f"TOTAL    : {stats['unique']}", (x0 + 14, y0 + 116), F, 0.8, (0, 255, 180), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"PEOPLE : {stats['persons']}", (x0 + 14, y0 + 78), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
+    cv2.putText(frame, f"MAX    : {stats['maxseen']}", (x0 + 14, y0 + 116), F, 0.8, (0, 255, 180), 2, cv2.LINE_AA)
     cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 148), F, 0.6, level_color, 2, cv2.LINE_AA)
     cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 28), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
@@ -208,7 +208,8 @@ def main():
     model = load_model()
     counter = CrowdCounter(model, MODEL_PATH or "yolov8s.pt", conf=PERSON_CONF,
                            classes=DETECT_CLASSES, use_sahi=USE_SAHI,
-                           use_tiled=USE_TILED, slice_size=SLICE_SIZE, imgsz=IMGSZ)
+                           use_tiled=USE_TILED, slice_size=SLICE_SIZE, imgsz=IMGSZ,
+                           track=False)
     crowd = CrowdAnalytics(overcrowd_threshold=OVERCROWD)
     os.makedirs(ALERT_DIR, exist_ok=True)
 
@@ -287,7 +288,7 @@ def main():
 
         # --- clean overlay on the full-screen footage ---
         stats = {
-            "fps": fps, "persons": count, "unique": unique_total,
+            "fps": fps, "persons": count, "maxseen": peak_count,
             "level": level, "overcrowded": overcrowded,
         }
         draw_overlay(frame, stats)
