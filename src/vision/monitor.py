@@ -171,7 +171,7 @@ class DetectorThread:
 def draw_overlay(frame, stats):
     """Draw a clean translucent stats box on top of the full-screen footage."""
     F = cv2.FONT_HERSHEY_SIMPLEX
-    bw, bh = 300, 110
+    bw, bh = 250, 60
     x0, y0 = 12, 12
     roi = frame[y0:y0 + bh, x0:x0 + bw]
     dark = np.zeros_like(roi)
@@ -182,9 +182,7 @@ def draw_overlay(frame, stats):
                    "HIGH": (0, 165, 255), "CRITICAL": (0, 0, 255)}.get(
                        stats['level'], (200, 200, 200))
 
-    cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 30), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"TOTAL : {stats['unique']}", (x0 + 14, y0 + 78), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
-    cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 28), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"TOTAL : {stats['unique']}", (x0 + 14, y0 + 30), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
 
     if stats['overcrowded']:
         cv2.putText(frame, "!! OVERCROWDING !!", (x0 + 14, y0 + bh + 30),
