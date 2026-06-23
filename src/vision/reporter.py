@@ -33,6 +33,7 @@ class Reporter:
         self.window_start = time.time()
         self.events = []          # crossing + alert + abnormal events
         self.peak_count = 0
+        self.unique_total = 0
         self.crossings = 0
         self.alerts = 0
         self.label = "session"
@@ -62,6 +63,9 @@ class Reporter:
     def update_peak(self, count):
         self.peak_count = max(self.peak_count, count)
 
+    def update_unique(self, total):
+        self.unique_total = max(self.unique_total, total)
+
     # ---- flushing ---------------------------------------------------------
     def maybe_flush_live(self):
         """Called every frame in LIVE mode; flushes when the interval elapses."""
@@ -87,8 +91,8 @@ class Reporter:
             "label": self.label,
             "window_start": datetime.fromtimestamp(self.window_start).isoformat(),
             "window_end": datetime.now().isoformat(),
-            "total_crossings": self.crossings,
             "peak_persons_in_frame": self.peak_count,
+            "total_unique_people": self.unique_total,
             "watchlist_alerts": self.alerts,
             "events": self.events,
         }
@@ -107,7 +111,7 @@ class Reporter:
                     w.writerow(self._event_row(ev))
 
         print(f"[REPORT] Saved: {wrote} + {base}.json  "
-              f"(crossings={self.crossings}, peak={self.peak_count}, alerts={self.alerts})")
+              f"(peak={self.peak_count}, unique={self.unique_total}, alerts={self.alerts})")
         self._reset_window()
         return base
 
@@ -134,8 +138,8 @@ class Reporter:
             ("Source", summary["label"]),
             ("Window start", summary["window_start"]),
             ("Window end", summary["window_end"]),
-            ("Total line crossings", summary["total_crossings"]),
             ("Peak persons in frame", summary["peak_persons_in_frame"]),
+            ("Total unique people", summary["total_unique_people"]),
             ("Watchlist alerts", summary["watchlist_alerts"]),
         ]
         ws["A1"] = "Field"; ws["B1"] = "Value"

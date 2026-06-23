@@ -136,11 +136,12 @@ def draw_overlay(frame, stats):
                    "HIGH": (0, 165, 255), "CRITICAL": (0, 0, 255)}.get(
                        stats['level'], (200, 200, 200))
 
-    cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 32), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"COUNT : {stats['persons']}", (x0 + 14, y0 + 78), F, 1.1, (0, 255, 0), 3, cv2.LINE_AA)
-    cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 116), F, 0.65, level_color, 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Watchlist hits: {stats['alerts']}", (x0 + 14, y0 + 148), F, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 30), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 30), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"IN FRAME : {stats['persons']}", (x0 + 14, y0 + 74), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
+    cv2.putText(frame, f"TOTAL    : {stats['unique']}", (x0 + 14, y0 + 108), F, 0.7, (0, 255, 180), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 138), F, 0.6, level_color, 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Watchlist hits: {stats['alerts']}", (x0 + 14, y0 + 166), F, 0.55, (0, 0, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 28), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
     if stats['overcrowded']:
         cv2.putText(frame, "!! OVERCROWDING !!", (x0 + 14, y0 + bh + 30),
@@ -201,12 +202,13 @@ def main():
             reporter.set_label(label)
         current_label = label
 
-        # --- crowd counting (whole-frame or SAHI tiled) ---
-        count, boxes, centers = counter.count(frame)
+        # --- crowd counting + unique-ID tracking (whole-frame or SAHI tiled) ---
+        count, unique_total, boxes, ids, centers = counter.process(frame)
         peak_count = max(peak_count, count)
         reporter.update_peak(count)
+        reporter.update_unique(unique_total)
         for (x1, y1, x2, y2) in boxes:
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1, cv2.LINE_AA)
 
         level = crowd._crowd_level(count)
         overcrowded = count >= OVERCROWD
@@ -247,7 +249,7 @@ def main():
 
         # --- clean overlay on the full-screen footage ---
         stats = {
-            "fps": fps, "persons": count, "level": level,
+            "fps": fps, "persons": count, "unique": unique_total, "level": level,
             "overcrowded": overcrowded, "alerts": alerts_total,
         }
         draw_overlay(frame, stats)
