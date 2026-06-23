@@ -61,6 +61,7 @@ IMGSZ = int(os.environ.get("NSA_IMGSZ", "1280"))         # whole-frame inference
 OVERCROWD = int(os.environ.get("NSA_OVERCROWD", "200"))  # crowd-level threshold
 DETECT_EVERY = max(1, int(os.environ.get("NSA_DETECT_EVERY", "1")))  # run detection every Nth frame (speed)
 SHOW_IDS = os.environ.get("NSA_SHOW_IDS", "1") == "1"    # draw unique track id on each box
+USE_DEDUP = os.environ.get("NSA_DEDUP", "0") == "1"      # motion-compensated unique count (panning drone)
 
 # Make sibling modules importable and resolve data paths from the project root,
 # so the app works no matter which directory you launch it from.
@@ -70,6 +71,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from camera_source import select_source, FrameSource          # noqa: E402
 from crowd_counter import CrowdCounter                        # noqa: E402
+from dedup_counter import DedupCounter                        # noqa: E402
 from analytics import CrowdAnalytics                          # noqa: E402
 from reporter import Reporter, ask_report_config              # noqa: E402
 
@@ -168,7 +170,7 @@ class DetectorThread:
 def draw_overlay(frame, stats):
     """Draw a clean translucent stats box on top of the full-screen footage."""
     F = cv2.FONT_HERSHEY_SIMPLEX
-    bw, bh = 300, 190
+    bw, bh = 300, 178
     x0, y0 = 12, 12
     roi = frame[y0:y0 + bh, x0:x0 + bw]
     dark = np.zeros_like(roi)
@@ -179,11 +181,12 @@ def draw_overlay(frame, stats):
                    "HIGH": (0, 165, 255), "CRITICAL": (0, 0, 255)}.get(
                        stats['level'], (200, 200, 200))
 
-    cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 30), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"IN FRAME : {stats['persons']}", (x0 + 14, y0 + 74), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
-    cv2.putText(frame, f"TOTAL    : {stats['unique']}", (x0 + 14, y0 + 108), F, 0.7, (0, 255, 180), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 140), F, 0.65, level_color, 2, cv2.LINE_AA)
-    cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 28), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 28), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"IN FRAME : {stats['persons']}", (x0 + 14, y0 + 66), F, 0.95, (0, 255, 0), 3, cv2.LINE_AA)
+    cv2.putText(frame, f"PEAK     : {stats['peak']}", (x0 + 14, y0 + 98), F, 0.65, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"TOTAL    : {stats['unique']}", (x0 + 14, y0 + 128), F, 0.65, (0, 255, 180), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 158), F, 0.6, level_color, 2, cv2.LINE_AA)
+    cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 26), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
     if stats['overcrowded']:
         cv2.putText(frame, "!! OVERCROWDING !!", (x0 + 14, y0 + bh + 30),
@@ -220,11 +223,15 @@ def main():
     frame_idx = 0
     current_label = None
     peak_count = 0
-    # Threaded detection for live sources (smooth); inline per-frame for video.
-    detector = DetectorThread(counter) if source.is_live else None
+    # De-dup needs sequential frames + their own detections, so it runs inline
+    # (no detector thread). Otherwise live uses a background detection thread.
+    dedup = DedupCounter() if USE_DEDUP else None
+    detector = DetectorThread(counter) if (source.is_live and not USE_DEDUP) else None
     if detector is not None:
         detector.start()
         print("[INFO] Live mode: detection running in background thread.")
+    if dedup is not None:
+        print("[INFO] De-dup ON: unique count via camera-motion compensation.")
     fps = 0.0
     fps_t0 = time.time()
     fps_n = 0
@@ -254,6 +261,8 @@ def main():
             count, unique_total, boxes, ids, centers = detector.get()
         else:
             count, unique_total, boxes, ids, centers = counter.process(frame)
+        if dedup is not None:
+            unique_total = dedup.update(frame, centers)
         peak_count = max(peak_count, count)
         reporter.update_peak(count)
         reporter.update_unique(unique_total)
@@ -279,8 +288,8 @@ def main():
 
         # --- clean overlay on the full-screen footage ---
         stats = {
-            "fps": fps, "persons": count, "unique": unique_total, "level": level,
-            "overcrowded": overcrowded,
+            "fps": fps, "persons": count, "unique": unique_total,
+            "peak": peak_count, "level": level, "overcrowded": overcrowded,
         }
         draw_overlay(frame, stats)
 
