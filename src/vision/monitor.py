@@ -70,7 +70,6 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from camera_source import select_source, FrameSource          # noqa: E402
 from crowd_counter import CrowdCounter                        # noqa: E402
 from analytics import CrowdAnalytics                          # noqa: E402
-from watchlist import Watchlist                               # noqa: E402
 from reporter import Reporter, ask_report_config              # noqa: E402
 
 DATA = PROJECT_ROOT / "data"
@@ -182,8 +181,7 @@ def draw_overlay(frame, stats):
     cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 30), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
     cv2.putText(frame, f"IN FRAME : {stats['persons']}", (x0 + 14, y0 + 74), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
     cv2.putText(frame, f"TOTAL    : {stats['unique']}", (x0 + 14, y0 + 108), F, 0.7, (0, 255, 180), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 138), F, 0.6, level_color, 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Watchlist hits: {stats['alerts']}", (x0 + 14, y0 + 166), F, 0.55, (0, 0, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 140), F, 0.65, level_color, 2, cv2.LINE_AA)
     cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 28), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
     if stats['overcrowded']:
@@ -209,7 +207,6 @@ def main():
                            classes=DETECT_CLASSES, use_sahi=USE_SAHI,
                            use_tiled=USE_TILED, slice_size=SLICE_SIZE, imgsz=IMGSZ)
     crowd = CrowdAnalytics(overcrowd_threshold=OVERCROWD)
-    watch = Watchlist(WATCH_DIR)
     os.makedirs(ALERT_DIR, exist_ok=True)
 
     window = "NeuralStream Monitoring"
@@ -221,8 +218,6 @@ def main():
     show_heatmap = False
     frame_idx = 0
     current_label = None
-    active_alerts = []           # recent (name, expiry_time) for the banner
-    alerts_total = 0
     peak_count = 0
     # Threaded detection for live sources (smooth); inline per-frame for video.
     detector = DetectorThread(counter) if source.is_live else None
@@ -271,29 +266,6 @@ def main():
         if show_heatmap:
             frame = crowd.density_overlay(frame, centers)
 
-        # --- watchlist (sample every 5th frame for speed) ---
-        if frame_idx % 5 == 0:
-            for m in watch.check(frame, now):
-                snap = os.path.join(
-                    ALERT_DIR,
-                    f"alert_{m['name']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
-                cv2.imwrite(snap, frame)
-                reporter.log_alert(m["name"], timestamp, snapshot=snap)
-                active_alerts.append((m["name"], now + 3.0))
-                alerts_total += 1
-                beep()
-                print(f"[ALERT] Watchlist match: {m['name']} -> {snap}")
-                bx = m["box"]
-                cv2.rectangle(frame, (bx[0], bx[1]), (bx[2], bx[3]), (0, 0, 255), 3)
-
-        # active watchlist banner
-        active_alerts = [(n, t) for (n, t) in active_alerts if t > now]
-        if active_alerts:
-            names = ", ".join(n for n, _ in active_alerts)
-            cv2.rectangle(frame, (0, 0), (w, 35), (0, 0, 255), -1)
-            cv2.putText(frame, f"WANTED MATCH: {names}", (20, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-
         # FPS
         fps_n += 1
         if fps_n >= 15:
@@ -304,7 +276,7 @@ def main():
         # --- clean overlay on the full-screen footage ---
         stats = {
             "fps": fps, "persons": count, "unique": unique_total, "level": level,
-            "overcrowded": overcrowded, "alerts": alerts_total,
+            "overcrowded": overcrowded,
         }
         draw_overlay(frame, stats)
 
