@@ -25,6 +25,7 @@ from ultralytics import YOLO  # keep first
 
 import os
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime
@@ -123,6 +124,46 @@ def load_model():
     raise RuntimeError("Could not load any YOLO model")
 
 
+class DetectorThread:
+    """Runs full-quality detection in the background so the live display stays
+    smooth. Detection is NOT reduced -- it keeps processing the newest frame as
+    fast as the CPU allows; the main loop just overlays the latest result."""
+
+    def __init__(self, counter):
+        self.counter = counter
+        self._frame = None
+        self._result = (0, 0, [], [])   # count, unique_total, boxes, centers
+        self._lock = threading.Lock()
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def submit(self, frame):
+        with self._lock:
+            self._frame = frame
+
+    def get(self):
+        with self._lock:
+            return self._result
+
+    def _run(self):
+        while self._running:
+            with self._lock:
+                f = self._frame
+                self._frame = None
+            if f is None:
+                time.sleep(0.005)
+                continue
+            count, unique_total, boxes, ids, centers = self.counter.process(f)
+            with self._lock:
+                self._result = (count, unique_total, boxes, centers)
+
+    def stop(self):
+        self._running = False
+
+
 def draw_overlay(frame, stats):
     """Draw a clean translucent stats box on top of the full-screen footage."""
     F = cv2.FONT_HERSHEY_SIMPLEX
@@ -182,7 +223,11 @@ def main():
     active_alerts = []           # recent (name, expiry_time) for the banner
     alerts_total = 0
     peak_count = 0
-    last_result = (0, 0, [], [])   # (count, unique_total, boxes, centers)
+    # Threaded detection for live sources (smooth); inline per-frame for video.
+    detector = DetectorThread(counter) if source.is_live else None
+    if detector is not None:
+        detector.start()
+        print("[INFO] Live mode: detection running in background thread.")
     fps = 0.0
     fps_t0 = time.time()
     fps_n = 0
@@ -204,15 +249,17 @@ def main():
             reporter.set_label(label)
         current_label = label
 
-        # --- crowd counting + unique-ID tracking (run every Nth frame for speed) ---
-        if frame_idx % DETECT_EVERY == 0:
-            count, unique_total, boxes, ids, centers = counter.process(frame)
-            last_result = (count, unique_total, boxes, centers)
-            peak_count = max(peak_count, count)
-            reporter.update_peak(count)
-            reporter.update_unique(unique_total)
+        # --- crowd counting + unique-ID tracking ---
+        # Live: detection runs in a background thread (smooth display, full
+        # detection quality). Video file: detect every frame for accuracy.
+        if detector is not None:
+            detector.submit(frame)
+            count, unique_total, boxes, centers = detector.get()
         else:
-            count, unique_total, boxes, centers = last_result
+            count, unique_total, boxes, ids, centers = counter.process(frame)
+        peak_count = max(peak_count, count)
+        reporter.update_peak(count)
+        reporter.update_unique(unique_total)
         for (x1, y1, x2, y2) in boxes:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1, cv2.LINE_AA)
 
@@ -273,6 +320,8 @@ def main():
             show_heatmap = not show_heatmap
         frame_idx += 1
 
+    if detector is not None:
+        detector.stop()
     reporter.flush()  # final report
     cv2.destroyAllWindows()
     print("[INFO] Monitoring stopped.")
