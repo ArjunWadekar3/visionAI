@@ -60,6 +60,7 @@ SLICE_SIZE = int(os.environ.get("NSA_SLICE", "512"))
 IMGSZ = int(os.environ.get("NSA_IMGSZ", "1280"))         # whole-frame inference size
 OVERCROWD = int(os.environ.get("NSA_OVERCROWD", "200"))  # crowd-level threshold
 DETECT_EVERY = max(1, int(os.environ.get("NSA_DETECT_EVERY", "1")))  # run detection every Nth frame (speed)
+SHOW_IDS = os.environ.get("NSA_SHOW_IDS", "1") == "1"    # draw unique track id on each box
 
 # Make sibling modules importable and resolve data paths from the project root,
 # so the app works no matter which directory you launch it from.
@@ -132,7 +133,7 @@ class DetectorThread:
     def __init__(self, counter):
         self.counter = counter
         self._frame = None
-        self._result = (0, 0, [], [])   # count, unique_total, boxes, centers
+        self._result = (0, 0, [], [], [])  # count, unique_total, boxes, ids, centers
         self._lock = threading.Lock()
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -158,7 +159,7 @@ class DetectorThread:
                 continue
             count, unique_total, boxes, ids, centers = self.counter.process(f)
             with self._lock:
-                self._result = (count, unique_total, boxes, centers)
+                self._result = (count, unique_total, boxes, ids, centers)
 
     def stop(self):
         self._running = False
@@ -250,14 +251,17 @@ def main():
         # detection quality). Video file: detect every frame for accuracy.
         if detector is not None:
             detector.submit(frame)
-            count, unique_total, boxes, centers = detector.get()
+            count, unique_total, boxes, ids, centers = detector.get()
         else:
             count, unique_total, boxes, ids, centers = counter.process(frame)
         peak_count = max(peak_count, count)
         reporter.update_peak(count)
         reporter.update_unique(unique_total)
-        for (x1, y1, x2, y2) in boxes:
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1, cv2.LINE_AA)
+        for (x1, y1, x2, y2), tid in zip(boxes, ids):
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            if SHOW_IDS:
+                cv2.putText(frame, str(tid), (x1, y1 - 3),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
 
         level = crowd._crowd_level(count)
         overcrowded = count >= OVERCROWD
