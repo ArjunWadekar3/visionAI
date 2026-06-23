@@ -26,13 +26,14 @@ except Exception:
 
 class CrowdCounter:
     def __init__(self, model, model_path, conf=0.3, classes=None,
-                 use_sahi=False, slice_size=512, overlap=0.2):
+                 use_sahi=False, slice_size=512, overlap=0.2, imgsz=1280):
         self.model = model                # ultralytics YOLO (whole-frame path)
         self.model_path = model_path
         self.conf = conf
         self.classes = classes
         self.slice_size = slice_size
         self.overlap = overlap
+        self.imgsz = imgsz                # larger -> small aerial people detected better
         self.use_sahi = use_sahi
         self._sahi_model = None
         if use_sahi:
@@ -72,7 +73,7 @@ class CrowdCounter:
 
     def _count_whole(self, frame):
         res = self.model.predict(frame, conf=self.conf, classes=self.classes,
-                                 verbose=False)
+                                 imgsz=self.imgsz, verbose=False)
         boxes, centers = [], []
         if res and res[0].boxes is not None:
             for b in res[0].boxes.xyxy.cpu().numpy():
