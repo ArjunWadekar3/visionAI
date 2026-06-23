@@ -32,6 +32,32 @@ def list_video_devices(max_index=6):
     return available
 
 
+def list_named_devices():
+    """Return [(index, name)] for each /dev/videoN, reading the device name from
+    /sys. Lets the user pick a camera by NAME instead of an index that shuffles
+    between reboots/replugs. Returns one entry per physical device (lowest node).
+    Empty on non-Linux."""
+    devices = []
+    seen_names = set()
+    for path in sorted(glob.glob("/dev/video*"),
+                       key=lambda p: int("".join(filter(str.isdigit, p)) or 0)):
+        digits = "".join(filter(str.isdigit, path))
+        if not digits:
+            continue
+        idx = int(digits)
+        name = f"video{idx}"
+        try:
+            with open(f"/sys/class/video4linux/video{idx}/name") as f:
+                name = f.read().strip()
+        except Exception:
+            pass
+        if name in seen_names:
+            continue          # skip extra nodes of the same physical device
+        seen_names.add(name)
+        devices.append((idx, name))
+    return devices
+
+
 class FrameSource:
     """Unified iterator over webcam / HDMI / a folder of video files."""
 
@@ -85,8 +111,16 @@ class FrameSource:
         if self.is_live:
             label = "Webcam" if self.mode == self.MODE_WEBCAM else \
                 f"HDMI (device {self.device_index})"
-            cap = self._open_capture(self.device_index)
-            if not cap.isOpened():
+            # Try the chosen node, then the next one (capture cards sometimes
+            # expose the real stream on device_index+1).
+            cap = None
+            for cand in (self.device_index, self.device_index + 1):
+                cap = self._open_capture(cand)
+                if cap.isOpened():
+                    self.device_index = cand
+                    break
+                cap.release()
+            if cap is None or not cap.isOpened():
                 raise RuntimeError(
                     f"Could not open {label}. Check the connection / index.")
             first = True
@@ -124,11 +158,23 @@ def select_source():
     choice = input("Enter 1 / 2 / 3: ").strip()
 
     if choice == "2":
-        devices = list_video_devices()
-        if devices:
-            print(f"[INFO] Detected video device indices: {devices}")
-        idx = input("Enter HDMI capture device index (e.g. 1 or 2): ").strip()
-        idx = int(idx) if idx.isdigit() else 1
+        named = list_named_devices()
+        if named:
+            print("\nDetected cameras (pick by name -- index can change on replug):")
+            for i, (idx, name) in enumerate(named, 1):
+                hint = "" if "integrated" in name.lower() else "   <- likely HDMI/capture"
+                print(f"  {i} - {name}  (/dev/video{idx}){hint}")
+            sel = input("Pick the HDMI/capture camera (number): ").strip()
+            if sel.isdigit() and 1 <= int(sel) <= len(named):
+                idx = named[int(sel) - 1][0]
+            else:
+                idx = int(sel) if sel.isdigit() else named[0][0]
+        else:
+            devices = list_video_devices()
+            if devices:
+                print(f"[INFO] Detected video device indices: {devices}")
+            raw = input("Enter HDMI capture device index: ").strip()
+            idx = int(raw) if raw.isdigit() else 0
         return FrameSource(FrameSource.MODE_HDMI, device_index=idx)
 
     if choice == "3":
