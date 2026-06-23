@@ -23,10 +23,12 @@ import numpy as np
 try:
     import torch
     _DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    # Use every CPU core for inference.
+    # Leave a couple of cores free for the smooth display loop (otherwise the
+    # detection thread saturates all cores and the feed stutters).
     if _DEVICE == "cpu":
         try:
-            torch.set_num_threads(os.cpu_count() or 4)
+            _default = max(1, (os.cpu_count() or 4) - 2)
+            torch.set_num_threads(int(os.environ.get("NSA_CPU_THREADS", _default)))
         except Exception:
             pass
 except Exception:
@@ -122,7 +124,7 @@ class SimpleTracker:
 class CrowdCounter:
     def __init__(self, model, model_path, conf=0.25, classes=None,
                  use_sahi=False, slice_size=512, overlap=0.2, imgsz=1280,
-                 track=True, use_tiled=False):
+                 track=True, use_tiled=False, max_det=1000):
         self.model = model
         self.model_path = model_path
         self.conf = conf
@@ -130,6 +132,7 @@ class CrowdCounter:
         self.slice_size = slice_size
         self.overlap = overlap
         self.imgsz = imgsz
+        self.max_det = max_det        # raise YOLO's default 300 cap for crowds
         self.use_sahi = use_sahi
         self.use_tiled = use_tiled      # batched-tile detection (CPU friendly)
         self.tracker = SimpleTracker() if track else None
@@ -182,7 +185,7 @@ class CrowdCounter:
         if not tiles:
             return []
         results = self.model.predict(tiles, conf=self.conf, classes=self.classes,
-                                     imgsz=s, verbose=False)
+                                     imgsz=s, max_det=self.max_det, verbose=False)
         boxes = []
         for r, (ox, oy) in zip(results, offsets):
             if r.boxes is not None:
@@ -212,7 +215,7 @@ class CrowdCounter:
             return boxes
         # whole-frame
         res = self.model.predict(frame, conf=self.conf, classes=self.classes,
-                                 imgsz=self.imgsz, verbose=False)
+                                 imgsz=self.imgsz, max_det=self.max_det, verbose=False)
         boxes = []
         if res and res[0].boxes is not None:
             for b in res[0].boxes.xyxy.cpu().numpy():

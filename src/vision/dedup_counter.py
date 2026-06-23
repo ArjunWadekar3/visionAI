@@ -31,15 +31,19 @@ class DedupCounter:
         self.grid = {}                         # (gx,gy) cell -> list[(x,y)]
         self.unique = 0
 
-    def _add_if_new(self, gx, gy):
+    def _match_or_add(self, gx, gy):
+        """Return the global id for this ground position (existing if already
+        seen nearby, else a new id)."""
         cx, cy = int(gx // self.cell), int(gy // self.cell)
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
-                for (px, py) in self.grid.get((cx + dx, cy + dy), ()):
+                for (px, py, pid) in self.grid.get((cx + dx, cy + dy), ()):
                     if (px - gx) ** 2 + (py - gy) ** 2 < self.dist * self.dist:
-                        return  # already counted this ground position
-        self.grid.setdefault((cx, cy), []).append((gx, gy))
+                        return pid  # same person seen before -> same id
         self.unique += 1
+        new_id = self.unique
+        self.grid.setdefault((cx, cy), []).append((gx, gy, new_id))
+        return new_id
 
     def update(self, frame, centers):
         """Update the global motion estimate and count any newly-seen positions."""
@@ -61,10 +65,13 @@ class DedupCounter:
                 if H_cur_to_prev is not None:
                     self.H = self.H @ H_cur_to_prev
 
+        ids = []
         for (cx, cy) in centers:
             v = self.H @ np.array([cx, cy, 1.0])
             if v[2] != 0:
-                self._add_if_new(v[0] / v[2], v[1] / v[2])
+                ids.append(self._match_or_add(v[0] / v[2], v[1] / v[2]))
+            else:
+                ids.append(-1)
 
         self.prev_kp, self.prev_des = kp, des
-        return self.unique
+        return self.unique, ids
