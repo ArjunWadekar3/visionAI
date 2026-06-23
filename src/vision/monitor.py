@@ -72,19 +72,54 @@ def beep():
         pass
 
 
+def get_screen_size():
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        w, h = root.winfo_screenwidth(), root.winfo_screenheight()
+        root.destroy()
+        return w, h
+    except Exception:
+        return 1920, 1080
+
+
+def fit_to_screen(img, sw, sh):
+    """Letterbox-resize img to fill (sw, sh). Returns (canvas, scale, pad_x, pad_y)."""
+    h, w = img.shape[:2]
+    s = min(sw / w, sh / h)
+    nw, nh = int(w * s), int(h * s)
+    resized = cv2.resize(img, (nw, nh))
+    canvas = np.zeros((sh, sw, 3), dtype=np.uint8)
+    px, py = (sw - nw) // 2, (sh - nh) // 2
+    canvas[py:py + nh, px:px + nw] = resized
+    return canvas, s, px, py
+
+
 class LineDrawer:
-    """Lets the user draw the counting line by dragging the mouse."""
+    """Lets the user draw the counting line by dragging the mouse.
+
+    Mouse coords arrive in the displayed (scaled+letterboxed) space, so we map
+    them back to original frame coordinates using the current scale/padding.
+    """
     def __init__(self, counter):
         self.counter = counter
         self.start = None
         self.dragging = False
+        self.scale = 1.0
+        self.pad_x = 0
+        self.pad_y = 0
+
+    def _to_frame(self, x, y):
+        return (int((x - self.pad_x) / self.scale),
+                int((y - self.pad_y) / self.scale))
 
     def on_mouse(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            self.start = (x, y)
+            self.start = self._to_frame(x, y)
             self.dragging = True
         elif event == cv2.EVENT_LBUTTONUP and self.dragging:
-            self.counter.line = (self.start, (x, y))
+            self.counter.line = (self.start, self._to_frame(x, y))
             self.counter.prev_side.clear()
             self.counter.counted_ids.clear()
             self.dragging = False
@@ -177,6 +212,8 @@ def main():
     window = "NeuralStream Monitoring"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    screen_w, screen_h = get_screen_size()
+    print(f"[INFO] Display size: {screen_w}x{screen_h}")
     drawer = LineDrawer(counter)
     cv2.setMouseCallback(window, drawer.on_mouse)
 
@@ -285,10 +322,14 @@ def main():
         panel = render_panel(frame.shape[0], stats)
         combined = cv2.hconcat([frame, panel])
 
+        # Scale to fill the screen (and keep mouse->line mapping correct)
+        disp, s, px, py = fit_to_screen(combined, screen_w, screen_h)
+        drawer.scale, drawer.pad_x, drawer.pad_y = s, px, py
+
         # live interval report
         reporter.maybe_flush_live()
 
-        cv2.imshow(window, combined)
+        cv2.imshow(window, disp)
         key = cv2.waitKey(1) & 0xFF
         if key == 27:        # ESC
             break
