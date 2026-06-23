@@ -263,13 +263,13 @@ def main():
         peak_count = max(peak_count, count)
         reporter.update_peak(count)
         reporter.update_unique(unique_total)
-        # Draw small green dots at center of detections (strict + loose)
+        # Draw green dots at center of detections (strict + loose)
         for (x1, y1, x2, y2) in loose_boxes:
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-            cv2.circle(frame, (cx, cy), 1, (0, 255, 0), -1)
+            cv2.circle(frame, (cx, cy), 2, (0, 255, 0), -1)
         for (x1, y1, x2, y2) in boxes:
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-            cv2.circle(frame, (cx, cy), 1, (0, 255, 0), -1)
+            cv2.circle(frame, (cx, cy), 2, (0, 255, 0), -1)
 
         level = crowd._crowd_level(count)
         overcrowded = count >= OVERCROWD
