@@ -96,17 +96,70 @@ class Reporter:
         with open(base + ".json", "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
 
-        with open(base + ".csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["type", "time", "detail"])
-            for ev in self.events:
-                detail = {k: v for k, v in ev.items() if k not in ("type", "time")}
-                w.writerow([ev.get("type"), ev.get("time"), json.dumps(detail)])
+        wrote = self._write_excel(base, summary)
+        if not wrote:  # openpyxl missing -> CSV fallback
+            wrote = base + ".csv"
+            with open(wrote, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["Event Type", "Time", "Person ID", "Direction",
+                            "Name", "Count", "Frame", "Snapshot"])
+                for ev in self.events:
+                    w.writerow(self._event_row(ev))
 
-        print(f"[REPORT] Saved: {base}.json / .csv  "
+        print(f"[REPORT] Saved: {wrote} + {base}.json  "
               f"(crossings={self.crossings}, peak={self.peak_count}, alerts={self.alerts})")
         self._reset_window()
         return base
+
+    @staticmethod
+    def _event_row(ev):
+        return [ev.get("type"), ev.get("time"), ev.get("id"),
+                ev.get("direction"), ev.get("name"), ev.get("count"),
+                ev.get("frame"), ev.get("snapshot")]
+
+    def _write_excel(self, base, summary):
+        """Write a proper .xlsx (Summary + Events sheets). Returns path or None."""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font
+        except Exception:
+            return None
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Summary"
+        bold = Font(bold=True)
+        rows = [
+            ("Mode", summary["mode"]),
+            ("Source", summary["label"]),
+            ("Window start", summary["window_start"]),
+            ("Window end", summary["window_end"]),
+            ("Total line crossings", summary["total_crossings"]),
+            ("Peak persons in frame", summary["peak_persons_in_frame"]),
+            ("Watchlist alerts", summary["watchlist_alerts"]),
+        ]
+        ws["A1"] = "Field"; ws["B1"] = "Value"
+        ws["A1"].font = bold; ws["B1"].font = bold
+        for k, v in rows:
+            ws.append([k, v])
+        ws.column_dimensions["A"].width = 24
+        ws.column_dimensions["B"].width = 40
+
+        ev_ws = wb.create_sheet("Events")
+        headers = ["Event Type", "Time", "Person ID", "Direction",
+                   "Name", "Count", "Frame", "Snapshot"]
+        ev_ws.append(headers)
+        for c in range(1, len(headers) + 1):
+            ev_ws.cell(row=1, column=c).font = bold
+        for ev in self.events:
+            ev_ws.append(self._event_row(ev))
+        widths = [16, 22, 11, 11, 16, 8, 8, 40]
+        for i, wdt in enumerate(widths, start=1):
+            ev_ws.column_dimensions[chr(64 + i)].width = wdt
+
+        path = base + ".xlsx"
+        wb.save(path)
+        return path
 
 
 def ask_report_config(default_dir):
@@ -120,10 +173,12 @@ def ask_report_config(default_dir):
     out_dir = os.path.expanduser(out_dir.strip('"').strip("'")) if out_dir else default_dir
 
     print("Report interval (live mode):")
-    print("  1 - every 20 minutes")
-    print("  2 - every 30 minutes")
-    print("  3 - hourly")
-    print("  4 - entire day (once)")
-    c = input("Enter 1/2/3/4 (default 3): ").strip()
-    interval = {"1": 20, "2": 30, "3": 60, "4": 1440}.get(c, 60)
+    print("  1 - every 5 minutes")
+    print("  2 - every 10 minutes")
+    print("  3 - every 20 minutes")
+    print("  4 - every 30 minutes")
+    print("  5 - hourly")
+    print("  6 - entire day (once)")
+    c = input("Enter 1/2/3/4/5/6 (default 5 = hourly): ").strip()
+    interval = {"1": 5, "2": 10, "3": 20, "4": 30, "5": 60, "6": 1440}.get(c, 60)
     return True, interval, out_dir
