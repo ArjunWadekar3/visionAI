@@ -13,6 +13,7 @@ lapx                                  # required by ByteTrack tracking (model.tr
 deepface
 face_recognition
 openpyxl                              # Excel (.xlsx) report export
+sahi                                  # tiled inference for small/dense/aerial detection (optional)
 
 # Platform-specific dlib (dependency of face_recognition):
 dlib-bin; platform_system == "Windows"   # prebuilt wheel, no compiler needed

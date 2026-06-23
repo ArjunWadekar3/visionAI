@@ -47,10 +47,15 @@ import numpy as np
 #     export NSA_CLASSES=0        # class id(s) to count (head model: usually 0)
 #
 MODEL_PATH = os.environ.get("NSA_MODEL_PATH", "")
-PERSON_CONF = float(os.environ.get("NSA_CONF", "0.4"))
+PERSON_CONF = float(os.environ.get("NSA_CONF", "0.3"))
 _cls_env = os.environ.get("NSA_CLASSES", "0")
 DETECT_CLASSES = [int(c) for c in _cls_env.split(",") if c.strip().lstrip("-").isdigit()]
-PANEL_W = 360  # width of the live side dashboard
+
+# SAHI tiled inference -- big boost for small/dense/aerial heads. Slower per
+# frame (many tiles), so off by default. Enable: export NSA_SAHI=1
+USE_SAHI = os.environ.get("NSA_SAHI", "0") == "1"
+SLICE_SIZE = int(os.environ.get("NSA_SLICE", "512"))
+OVERCROWD = int(os.environ.get("NSA_OVERCROWD", "200"))  # crowd-level threshold
 
 # Make sibling modules importable and resolve data paths from the project root,
 # so the app works no matter which directory you launch it from.
@@ -59,8 +64,8 @@ PROJECT_ROOT = SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from camera_source import select_source, FrameSource          # noqa: E402
-from person_counter import LineCrossingCounter                # noqa: E402
-from analytics import CrowdAnalytics, DensityEstimator        # noqa: E402
+from crowd_counter import CrowdCounter                        # noqa: E402
+from analytics import CrowdAnalytics                          # noqa: E402
 from watchlist import Watchlist                               # noqa: E402
 from reporter import Reporter, ask_report_config              # noqa: E402
 
@@ -97,34 +102,6 @@ def get_screen_size():
         return 1920, 1080
 
 
-class LineDrawer:
-    """Lets the user draw the counting line by dragging the mouse.
-
-    The footage is stretched to fill the screen, so map mouse coords back to
-    original frame coordinates using the current x/y scale.
-    """
-    def __init__(self, counter):
-        self.counter = counter
-        self.start = None
-        self.dragging = False
-        self.scale_x = 1.0
-        self.scale_y = 1.0
-
-    def _to_frame(self, x, y):
-        return (int(x / self.scale_x), int(y / self.scale_y))
-
-    def on_mouse(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.start = self._to_frame(x, y)
-            self.dragging = True
-        elif event == cv2.EVENT_LBUTTONUP and self.dragging:
-            self.counter.line = (self.start, self._to_frame(x, y))
-            self.counter.prev_side.clear()
-            self.counter.counted_ids.clear()
-            self.dragging = False
-            print(f"[INFO] Counting line set: {self.counter.line}")
-
-
 def load_model():
     # Custom model (head / aerial / VisDrone) takes priority for drone footage.
     if MODEL_PATH:
@@ -158,11 +135,10 @@ def draw_overlay(frame, stats):
                    "HIGH": (0, 165, 255), "CRITICAL": (0, 0, 255)}.get(
                        stats['level'], (200, 200, 200))
 
-    cv2.putText(frame, "LIVE MONITOR", (x0 + 14, y0 + 32), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Persons : {stats['persons']}", (x0 + 14, y0 + 68), F, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Crowd   : {stats['level']}", (x0 + 14, y0 + 100), F, 0.65, level_color, 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Crossed : {stats['crossed']}", (x0 + 14, y0 + 132), F, 0.65, (60, 120, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Alerts  : {stats['alerts']}", (x0 + 14, y0 + 162), F, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 32), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"COUNT : {stats['persons']}", (x0 + 14, y0 + 78), F, 1.1, (0, 255, 0), 3, cv2.LINE_AA)
+    cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 116), F, 0.65, level_color, 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Watchlist hits: {stats['alerts']}", (x0 + 14, y0 + 148), F, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
     cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 30), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
     if stats['overcrowded']:
@@ -184,9 +160,10 @@ def main():
         print(f"[INFO] Reports will be saved to: {out_dir}")
 
     model = load_model()
-    counter = LineCrossingCounter()
-    crowd = CrowdAnalytics(overcrowd_threshold=50)
-    density_est = DensityEstimator()
+    counter = CrowdCounter(model, MODEL_PATH or "yolov8s.pt", conf=PERSON_CONF,
+                           classes=DETECT_CLASSES, use_sahi=USE_SAHI,
+                           slice_size=SLICE_SIZE)
+    crowd = CrowdAnalytics(overcrowd_threshold=OVERCROWD)
     watch = Watchlist(WATCH_DIR)
     os.makedirs(ALERT_DIR, exist_ok=True)
 
@@ -195,67 +172,47 @@ def main():
     cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     screen_w, screen_h = get_screen_size()
     print(f"[INFO] Display size: {screen_w}x{screen_h}")
-    drawer = LineDrawer(counter)
-    cv2.setMouseCallback(window, drawer.on_mouse)
 
     show_heatmap = False
     frame_idx = 0
     current_label = None
     active_alerts = []           # recent (name, expiry_time) for the banner
-    recent_activity = deque(maxlen=6)  # (text, expiry) for the side panel
     alerts_total = 0
+    peak_count = 0
     fps = 0.0
     fps_t0 = time.time()
     fps_n = 0
 
-    print("\n[INFO] Started. Drag mouse to set the red line. 'd'=heatmap, ESC=quit.\n")
+    print("\n[INFO] Started. 'd'=density heatmap, ESC=quit.\n")
 
     for frame, label, new_segment in source.frames():
         now = time.time()
         timestamp = datetime.now().isoformat(timespec="seconds")
         h, w = frame.shape[:2]
-        counter.set_default_line(w, h)
 
         # Per-video report boundary
         if new_segment and mode == Reporter.MODE_VIDEO:
             if current_label is not None:
                 reporter.flush()          # finish previous video's report
-            counter.reset()
+            peak_count = 0
             reporter.set_label(label)
         if current_label is None:
             reporter.set_label(label)
         current_label = label
 
-        # --- detection + tracking (persistent IDs) ---
-        results = model.track(frame, persist=True, classes=DETECT_CLASSES,
-                              conf=PERSON_CONF, iou=0.5,
-                              tracker="bytetrack.yaml", verbose=False)
-        tracks = []
-        if results and results[0].boxes is not None and results[0].boxes.id is not None:
-            boxes = results[0].boxes
-            for box, tid in zip(boxes.xyxy.cpu().numpy(), boxes.id.cpu().numpy()):
-                x1, y1, x2, y2 = box[:4]
-                tracks.append((int(tid), float(x1), float(y1), float(x2), float(y2)))
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)),
-                              (0, 255, 0), 2)
-                cv2.putText(frame, f"#{int(tid)}", (int(x1), int(y1) - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        # --- crowd counting (whole-frame or SAHI tiled) ---
+        count, boxes, centers = counter.count(frame)
+        peak_count = max(peak_count, count)
+        reporter.update_peak(count)
+        for (x1, y1, x2, y2) in boxes:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
 
-        # --- line crossing ---
-        for ev in counter.update(tracks, frame_idx, timestamp):
-            reporter.log_crossing(ev)
-
-        # --- crowd analytics ---
-        info = crowd.update(tracks)
-        reporter.update_peak(info["count"])
-        for ab in info["abnormal"]:
-            reporter.log_abnormal(ab, timestamp)
-            if ab["type"] == "overcrowding":
-                recent_activity.append((f"Overcrowding ({ab['count']})", now + 4))
-            else:
-                recent_activity.append((f"Person #{ab['id']}: {ab['type']}", now + 4))
+        level = crowd._crowd_level(count)
+        overcrowded = count >= OVERCROWD
+        if overcrowded:
+            reporter.log_abnormal({"type": "overcrowding", "count": count}, timestamp)
         if show_heatmap:
-            frame = crowd.density_overlay(frame, info["centers"])
+            frame = crowd.density_overlay(frame, centers)
 
         # --- watchlist (sample every 5th frame for speed) ---
         if frame_idx % 5 == 0:
@@ -266,17 +223,13 @@ def main():
                 cv2.imwrite(snap, frame)
                 reporter.log_alert(m["name"], timestamp, snapshot=snap)
                 active_alerts.append((m["name"], now + 3.0))
-                recent_activity.append((f"WANTED: {m['name']}", now + 5))
                 alerts_total += 1
                 beep()
                 print(f"[ALERT] Watchlist match: {m['name']} -> {snap}")
                 bx = m["box"]
                 cv2.rectangle(frame, (bx[0], bx[1]), (bx[2], bx[3]), (0, 0, 255), 3)
 
-        # --- draw clean line + boxes on the feed; stats go to the side panel ---
-        counter.draw(frame)
-
-        # active watchlist banner (kept on the feed, it's important)
+        # active watchlist banner
         active_alerts = [(n, t) for (n, t) in active_alerts if t > now]
         if active_alerts:
             names = ", ".join(n for n, _ in active_alerts)
@@ -293,16 +246,12 @@ def main():
 
         # --- clean overlay on the full-screen footage ---
         stats = {
-            "fps": fps, "persons": info["count"], "level": info["level"],
-            "overcrowded": info["overcrowded"], "crossed": counter.total,
-            "alerts": alerts_total,
+            "fps": fps, "persons": count, "level": level,
+            "overcrowded": overcrowded, "alerts": alerts_total,
         }
         draw_overlay(frame, stats)
 
-        # stretch footage to fill the entire screen; keep mouse->line mapping
         disp = cv2.resize(frame, (screen_w, screen_h))
-        drawer.scale_x = screen_w / w
-        drawer.scale_y = screen_h / h
 
         # live interval report
         reporter.maybe_flush_live()
