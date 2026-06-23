@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# Models (downloaded at runtime)
+*.pt
+
+# Runtime output
+data/reports/*
+data/alerts/*
+!data/reports/.gitkeep
+!data/alerts/.gitkeep
+
+# OS / editor
+.DS_Store
+*.swp

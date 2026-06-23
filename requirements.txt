@@ -1,0 +1,18 @@
+# NeuralStream Vision - pinned working set (Python 3.11 / 3.12)
+# These versions are mutually compatible. The key constraint is that
+# mediapipe (legacy solutions API) needs numpy<2 + protobuf<5, so TensorFlow
+# is pinned to 2.16.x to match.
+
+numpy==1.26.4
+opencv-contrib-python==4.11.0.86      # provides cv2 with GUI (imshow); do NOT also install opencv-python
+mediapipe==0.10.21                    # 0.10.35 removed the legacy mp.solutions API
+tensorflow==2.16.1
+tf-keras==2.16.0
+ultralytics
+lapx                                  # required by ByteTrack tracking (model.track)
+deepface
+face_recognition
+
+# Platform-specific dlib (dependency of face_recognition):
+dlib-bin; platform_system == "Windows"   # prebuilt wheel, no compiler needed
+dlib; platform_system != "Windows"        # builds from source (needs cmake + build-essential)

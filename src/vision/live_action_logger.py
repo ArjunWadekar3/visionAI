@@ -1,10 +1,13 @@
+# NOTE: ultralytics (torch) MUST be imported before deepface (tensorflow).
+# torch and tensorflow both link OpenMP; loading TF first then torch
+# causes a segfault on Linux. Importing YOLO first avoids the clash.
+from ultralytics import YOLO
 import cv2
 import mediapipe as mp
 import math
 import face_recognition
 import os
 from deepface import DeepFace
-from ultralytics import YOLO
 import ctypes
 
 # Init MediaPipe
