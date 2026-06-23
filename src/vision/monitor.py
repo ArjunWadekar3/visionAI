@@ -267,12 +267,16 @@ def main():
         peak_count = max(peak_count, count)
         reporter.update_peak(count)
         reporter.update_unique(unique_total)
-        # Draw all boxes (strict + loose) - same color, thin
-        for (x1, y1, x2, y2) in loose_boxes:
+        # Draw all boxes (strict + loose) with IDs
+        for i, (x1, y1, x2, y2) in enumerate(loose_boxes):
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            cv2.putText(frame, f"L{i}", (x1, y1 - 3),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0), 1)
         # Draw strict boxes (counting)
         for (x1, y1, x2, y2), tid in zip(boxes, ids):
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            cv2.putText(frame, str(tid), (x1, y1 - 3),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
 
         level = crowd._crowd_level(count)
         overcrowded = count >= OVERCROWD
