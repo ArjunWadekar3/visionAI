@@ -171,7 +171,7 @@ class DetectorThread:
 def draw_overlay(frame, stats):
     """Draw a clean translucent stats box on top of the full-screen footage."""
     F = cv2.FONT_HERSHEY_SIMPLEX
-    bw, bh = 300, 168
+    bw, bh = 300, 110
     x0, y0 = 12, 12
     roi = frame[y0:y0 + bh, x0:x0 + bw]
     dark = np.zeros_like(roi)
@@ -183,9 +183,7 @@ def draw_overlay(frame, stats):
                        stats['level'], (200, 200, 200))
 
     cv2.putText(frame, "CROWD MONITOR", (x0 + 14, y0 + 30), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"PEOPLE : {stats['persons']}", (x0 + 14, y0 + 78), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
-    cv2.putText(frame, f"TOTAL  : {stats['unique']}", (x0 + 14, y0 + 116), F, 0.8, (0, 255, 180), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Crowd : {stats['level']}", (x0 + 14, y0 + 148), F, 0.6, level_color, 2, cv2.LINE_AA)
+    cv2.putText(frame, f"TOTAL : {stats['unique']}", (x0 + 14, y0 + 78), F, 1.0, (0, 255, 0), 3, cv2.LINE_AA)
     cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 28), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
     if stats['overcrowded']:
@@ -267,13 +265,13 @@ def main():
         peak_count = max(peak_count, count)
         reporter.update_peak(count)
         reporter.update_unique(unique_total)
-        # Draw green dots at center of detections (strict + loose)
+        # Draw small green dots at center of detections (strict + loose)
         for (x1, y1, x2, y2) in loose_boxes:
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-            cv2.circle(frame, (cx, cy), 3, (0, 255, 0), -1)
+            cv2.circle(frame, (cx, cy), 1, (0, 255, 0), -1)
         for (x1, y1, x2, y2) in boxes:
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-            cv2.circle(frame, (cx, cy), 3, (0, 255, 0), -1)
+            cv2.circle(frame, (cx, cy), 1, (0, 255, 0), -1)
 
         level = crowd._crowd_level(count)
         overcrowded = count >= OVERCROWD
