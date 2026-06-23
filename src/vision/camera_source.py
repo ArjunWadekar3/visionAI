@@ -66,10 +66,11 @@ class FrameSource:
     def _open_capture(self, target):
         cap = cv2.VideoCapture(target)
         if self.is_live:
-            # Force MJPG: many USB/HDMI capture cards default to a raw/greyscale
-            # format that OpenCV renders washed-out or black & white. MJPG gives
-            # proper colour and higher FPS.
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            # MJPG only for HDMI capture cards (they often default to a raw
+            # format that renders washed-out). Do NOT force it on the laptop
+            # webcam -- that can break its colour output.
+            if self.mode == self.MODE_HDMI:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         return cap

@@ -30,6 +30,10 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+# Force X11 (xcb) backend so the window can go truly fullscreen on Wayland/GNOME
+# (Wayland fullscreen via OpenCV HighGUI is unreliable). Must be set before cv2.
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+
 import cv2
 import numpy as np
 
@@ -84,35 +88,21 @@ def get_screen_size():
         return 1920, 1080
 
 
-def fit_to_screen(img, sw, sh):
-    """Letterbox-resize img to fill (sw, sh). Returns (canvas, scale, pad_x, pad_y)."""
-    h, w = img.shape[:2]
-    s = min(sw / w, sh / h)
-    nw, nh = int(w * s), int(h * s)
-    resized = cv2.resize(img, (nw, nh))
-    canvas = np.zeros((sh, sw, 3), dtype=np.uint8)
-    px, py = (sw - nw) // 2, (sh - nh) // 2
-    canvas[py:py + nh, px:px + nw] = resized
-    return canvas, s, px, py
-
-
 class LineDrawer:
     """Lets the user draw the counting line by dragging the mouse.
 
-    Mouse coords arrive in the displayed (scaled+letterboxed) space, so we map
-    them back to original frame coordinates using the current scale/padding.
+    The footage is stretched to fill the screen, so map mouse coords back to
+    original frame coordinates using the current x/y scale.
     """
     def __init__(self, counter):
         self.counter = counter
         self.start = None
         self.dragging = False
-        self.scale = 1.0
-        self.pad_x = 0
-        self.pad_y = 0
+        self.scale_x = 1.0
+        self.scale_y = 1.0
 
     def _to_frame(self, x, y):
-        return (int((x - self.pad_x) / self.scale),
-                int((y - self.pad_y) / self.scale))
+        return (int(x / self.scale_x), int(y / self.scale_y))
 
     def on_mouse(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -137,56 +127,30 @@ def load_model():
     raise RuntimeError("Could not load any YOLO model")
 
 
-def render_panel(height, stats):
-    """Build the live dashboard panel shown to the right of the video feed."""
-    panel = np.full((height, PANEL_W, 3), 25, dtype=np.uint8)
+def draw_overlay(frame, stats):
+    """Draw a clean translucent stats box on top of the full-screen footage."""
     F = cv2.FONT_HERSHEY_SIMPLEX
-    x = 18
-    y = 40
+    bw, bh = 300, 190
+    x0, y0 = 12, 12
+    roi = frame[y0:y0 + bh, x0:x0 + bw]
+    dark = np.zeros_like(roi)
+    cv2.addWeighted(dark, 0.55, roi, 0.45, 0, roi)  # translucent dark panel
+    cv2.rectangle(frame, (x0, y0), (x0 + bw, y0 + bh), (80, 80, 80), 1)
 
-    def line(text, color=(230, 230, 230), scale=0.6, thick=1, gap=30):
-        nonlocal y
-        cv2.putText(panel, text, (x, y), F, scale, color, thick, cv2.LINE_AA)
-        y += gap
-
-    line("LIVE MONITOR", (0, 255, 255), 0.8, 2, 26)
-    cv2.line(panel, (x, y - 8), (PANEL_W - x, y - 8), (70, 70, 70), 1)
-    y += 12
-
-    line(f"Source : {stats['source'][:24]}", (180, 180, 180), 0.5, 1, 26)
-    line(f"FPS    : {stats['fps']:.1f}", (180, 180, 180), 0.5, 1, 34)
-
-    line(f"Persons now : {stats['persons']}", (0, 255, 0), 0.7, 2, 30)
     level_color = {"LOW": (0, 255, 0), "MEDIUM": (0, 255, 255),
                    "HIGH": (0, 165, 255), "CRITICAL": (0, 0, 255)}.get(
                        stats['level'], (200, 200, 200))
-    line(f"Crowd level : {stats['level']}", level_color, 0.7, 2, 34)
 
-    cv2.line(panel, (x, y - 14), (PANEL_W - x, y - 14), (70, 70, 70), 1)
-    line(f"Line crossed: {stats['crossed']}", (0, 0, 255), 0.7, 2, 28)
-    line(f"   A->B {stats['a2b']}   B->A {stats['b2a']}", (160, 160, 255), 0.55, 1, 34)
-
-    cv2.line(panel, (x, y - 14), (PANEL_W - x, y - 14), (70, 70, 70), 1)
-    line(f"Watchlist alerts: {stats['alerts']}", (0, 0, 255), 0.6, 2, 30)
+    cv2.putText(frame, "LIVE MONITOR", (x0 + 14, y0 + 32), F, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Persons : {stats['persons']}", (x0 + 14, y0 + 68), F, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Crowd   : {stats['level']}", (x0 + 14, y0 + 100), F, 0.65, level_color, 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Crossed : {stats['crossed']}", (x0 + 14, y0 + 132), F, 0.65, (60, 120, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Alerts  : {stats['alerts']}", (x0 + 14, y0 + 162), F, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"FPS {stats['fps']:.0f}", (x0 + bw - 80, y0 + 30), F, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
     if stats['overcrowded']:
-        cv2.rectangle(panel, (x - 6, y - 18), (PANEL_W - 10, y + 8), (0, 0, 255), -1)
-        line("!! OVERCROWDING !!", (255, 255, 255), 0.6, 2, 36)
-    else:
-        y += 6
-
-    cv2.line(panel, (x, y - 14), (PANEL_W - x, y - 14), (70, 70, 70), 1)
-    line("Recent activity:", (255, 255, 0), 0.6, 1, 26)
-    if stats['activities']:
-        for txt in stats['activities']:
-            line(f" - {txt}", (200, 200, 200), 0.5, 1, 24)
-    else:
-        line(" (none)", (120, 120, 120), 0.5, 1, 24)
-
-    # footer hint
-    cv2.putText(panel, "drag=line  d=heatmap  ESC=quit",
-                (x, height - 20), F, 0.45, (120, 120, 120), 1, cv2.LINE_AA)
-    return panel
+        cv2.putText(frame, "!! OVERCROWDING !!", (x0 + 14, y0 + bh + 30),
+                    F, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
 
 
 def main():
@@ -310,21 +274,18 @@ def main():
             fps_t0 = time.time()
             fps_n = 0
 
-        # --- compose feed + side dashboard panel ---
-        activities = [t for (t, exp) in recent_activity if exp > now]
+        # --- clean overlay on the full-screen footage ---
         stats = {
-            "source": label, "fps": fps, "persons": info["count"],
-            "level": info["level"], "overcrowded": info["overcrowded"],
-            "crossed": counter.total, "a2b": counter.count_a2b,
-            "b2a": counter.count_b2a, "alerts": alerts_total,
-            "activities": activities[-6:],
+            "fps": fps, "persons": info["count"], "level": info["level"],
+            "overcrowded": info["overcrowded"], "crossed": counter.total,
+            "alerts": alerts_total,
         }
-        panel = render_panel(frame.shape[0], stats)
-        combined = cv2.hconcat([frame, panel])
+        draw_overlay(frame, stats)
 
-        # Scale to fill the screen (and keep mouse->line mapping correct)
-        disp, s, px, py = fit_to_screen(combined, screen_w, screen_h)
-        drawer.scale, drawer.pad_x, drawer.pad_y = s, px, py
+        # stretch footage to fill the entire screen; keep mouse->line mapping
+        disp = cv2.resize(frame, (screen_w, screen_h))
+        drawer.scale_x = screen_w / w
+        drawer.scale_y = screen_h / h
 
         # live interval report
         reporter.maybe_flush_live()
