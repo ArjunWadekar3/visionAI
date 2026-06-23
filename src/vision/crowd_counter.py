@@ -196,15 +196,15 @@ class CrowdCounter:
         return _nms(boxes, 0.5)
 
     def _filter_head_boxes(self, boxes, frame, frame_h, frame_w):
-        """Post-filter to keep only head-like boxes: strict aspect ratio + area + darkness.
-        Removes shadows (dark regions), banners (wide), thin lines, signals (small/large).
-        Tuned for aerial/crowd footage. Override: NSA_HEAD_MIN_AREA, NSA_HEAD_MAX_AREA, etc."""
-        min_area = int(os.environ.get("NSA_HEAD_MIN_AREA", "100"))
+        """Post-filter to keep only head-like boxes: aspect ratio + area + darkness.
+        Removes only egregious false positives (very dark shadows, huge banners).
+        Override: NSA_HEAD_MIN_AREA, NSA_HEAD_MAX_AREA, etc."""
+        min_area = int(os.environ.get("NSA_HEAD_MIN_AREA", "50"))
         max_area = int(os.environ.get("NSA_HEAD_MAX_AREA",
-                                      int((frame_h * frame_w) * 0.04)))
-        min_aspect = float(os.environ.get("NSA_HEAD_MIN_ASPECT", "0.6"))
-        max_aspect = float(os.environ.get("NSA_HEAD_MAX_ASPECT", "1.7"))
-        min_brightness = int(os.environ.get("NSA_HEAD_MIN_BRIGHTNESS", "50"))
+                                      int((frame_h * frame_w) * 0.08)))
+        min_aspect = float(os.environ.get("NSA_HEAD_MIN_ASPECT", "0.4"))
+        max_aspect = float(os.environ.get("NSA_HEAD_MAX_ASPECT", "2.5"))
+        min_brightness = int(os.environ.get("NSA_HEAD_MIN_BRIGHTNESS", "20"))
         filtered = []
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame is not None else None
         for (x1, y1, x2, y2) in boxes:
