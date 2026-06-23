@@ -194,10 +194,34 @@ class CrowdCounter:
                                   int(b[2] + ox), int(b[3] + oy)))
         return _nms(boxes, 0.5)
 
+    def _filter_head_boxes(self, boxes, frame_h, frame_w):
+        """Post-filter to keep only head-like boxes: reasonable aspect ratio + area.
+        Removes shadows, banners, thin lines, etc. Tuned for aerial/crowd footage.
+        NSA_HEAD_MIN_AREA, NSA_HEAD_MAX_AREA, NSA_HEAD_ASPECT for override."""
+        min_area = int(os.environ.get("NSA_HEAD_MIN_AREA", "80"))
+        max_area = int(os.environ.get("NSA_HEAD_MAX_AREA",
+                                      int((frame_h * frame_w) * 0.1)))
+        min_aspect = float(os.environ.get("NSA_HEAD_MIN_ASPECT", "0.4"))
+        max_aspect = float(os.environ.get("NSA_HEAD_MAX_ASPECT", "2.5"))
+        filtered = []
+        for (x1, y1, x2, y2) in boxes:
+            w = x2 - x1
+            h = y2 - y1
+            area = w * h
+            if area < min_area or area > max_area:
+                continue
+            # Head aspect ratio: roughly square
+            aspect = h / (w + 1e-6)
+            if aspect < min_aspect or aspect > max_aspect:
+                continue
+            filtered.append((x1, y1, x2, y2))
+        return filtered
+
     def _detect(self, frame):
         """Return list of (x1,y1,x2,y2) person boxes for one frame."""
         if self.use_tiled:
-            return self._detect_tiled_batch(frame)
+            boxes = self._detect_tiled_batch(frame)
+            return self._filter_head_boxes(boxes, frame.shape[0], frame.shape[1])
         if self.use_sahi and self._sahi_model is not None:
             from sahi.predict import get_sliced_prediction
             result = get_sliced_prediction(
@@ -212,7 +236,7 @@ class CrowdCounter:
                 bb = obj.bbox
                 boxes.append((int(bb.minx), int(bb.miny),
                               int(bb.maxx), int(bb.maxy)))
-            return boxes
+            return self._filter_head_boxes(boxes, frame.shape[0], frame.shape[1])
         # whole-frame
         res = self.model.predict(frame, conf=self.conf, classes=self.classes,
                                  imgsz=self.imgsz, max_det=self.max_det, verbose=False)
@@ -220,7 +244,7 @@ class CrowdCounter:
         if res and res[0].boxes is not None:
             for b in res[0].boxes.xyxy.cpu().numpy():
                 boxes.append((int(b[0]), int(b[1]), int(b[2]), int(b[3])))
-        return boxes
+        return self._filter_head_boxes(boxes, frame.shape[0], frame.shape[1])
 
     def process(self, frame):
         """Return (count, unique_total, boxes, ids, centers)."""
