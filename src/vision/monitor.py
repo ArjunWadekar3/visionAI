@@ -57,6 +57,7 @@ USE_SAHI = os.environ.get("NSA_SAHI", "0") == "1"
 SLICE_SIZE = int(os.environ.get("NSA_SLICE", "512"))
 IMGSZ = int(os.environ.get("NSA_IMGSZ", "1280"))         # whole-frame inference size
 OVERCROWD = int(os.environ.get("NSA_OVERCROWD", "200"))  # crowd-level threshold
+DETECT_EVERY = max(1, int(os.environ.get("NSA_DETECT_EVERY", "1")))  # run detection every Nth frame (speed)
 
 # Make sibling modules importable and resolve data paths from the project root,
 # so the app works no matter which directory you launch it from.
@@ -181,6 +182,7 @@ def main():
     active_alerts = []           # recent (name, expiry_time) for the banner
     alerts_total = 0
     peak_count = 0
+    last_result = (0, 0, [], [])   # (count, unique_total, boxes, centers)
     fps = 0.0
     fps_t0 = time.time()
     fps_n = 0
@@ -202,11 +204,15 @@ def main():
             reporter.set_label(label)
         current_label = label
 
-        # --- crowd counting + unique-ID tracking (whole-frame or SAHI tiled) ---
-        count, unique_total, boxes, ids, centers = counter.process(frame)
-        peak_count = max(peak_count, count)
-        reporter.update_peak(count)
-        reporter.update_unique(unique_total)
+        # --- crowd counting + unique-ID tracking (run every Nth frame for speed) ---
+        if frame_idx % DETECT_EVERY == 0:
+            count, unique_total, boxes, ids, centers = counter.process(frame)
+            last_result = (count, unique_total, boxes, centers)
+            peak_count = max(peak_count, count)
+            reporter.update_peak(count)
+            reporter.update_unique(unique_total)
+        else:
+            count, unique_total, boxes, centers = last_result
         for (x1, y1, x2, y2) in boxes:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 1, cv2.LINE_AA)
 
