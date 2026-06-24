@@ -1,5 +1,5 @@
 """
-NeuralStream Vision - Monitoring System
+Vision Monitoring System
 =======================================
 
 Main entry point. Ties together:
@@ -191,7 +191,7 @@ def draw_overlay(frame, stats):
 
 def main():
     print("=" * 60)
-    print(" NeuralStream Vision - Monitoring System")
+    print(" Vision Monitoring System")
     print("=" * 60)
 
     source = select_source()
@@ -210,7 +210,7 @@ def main():
     crowd = CrowdAnalytics(overcrowd_threshold=OVERCROWD)
     os.makedirs(ALERT_DIR, exist_ok=True)
 
-    window = "NeuralStream Monitoring"
+    window = "Vision Monitoring System"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     screen_w, screen_h = get_screen_size()
